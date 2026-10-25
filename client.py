@@ -3,30 +3,23 @@ import socket
 import threading
 import time
 import subprocess
+import cmdModule
 
-BACKGROUND_UPDATE_INTERVAL = 1
+# Storing all session's variable in an object
+appState = cmdModule.applicationState()
+appState.broadcastSignature = 'PRESENCE'
+appState.broadcastIP = '<broadcast>'
+appState.broadcastPort = 50000
+appState.broadcastInterval = 3
 
-CLIENT_IP = '192.168.1.6'
-#CLIENT_PORT = 50000
-CLIENT_PORT = int(input("Enter Port: ")) # Local testing only
+appState.threadLock = threading.Lock()
+appState.backgroundUpdateInterval = 1
 
-BROADCAST_TYPE = 'PRESENCE'
-BROADCAST_IP = '<broadcast>'
-BROADCAST_PORT = 50000
-BROADCAST_INTERVAL = 3
+appState.clientIP = '192.168.1.6'
+appState.clientPORT = int(input("Enter Port: ")) # Local testing only
 
-username = ''
-userActive = True
-
-isListening : bool = False
-
-threadLock = threading.Lock()
-
-discoveredPeer = {}
-
-selectedUser = None
-tcpConnections = {}
-chatHistory = []
+appState.username = ''
+appState.userActivity = True
 
 def clearConsole():
     subprocess.run('clear', shell=True)
@@ -34,16 +27,13 @@ def clearConsole():
 def displayDiscoveredPeer(cmd : str) -> bool:
     clearConsole()
     print("Dicovered Peer(s): ")
-    for k, v in discoveredPeer.items():
+    for k, v in appState.discoveredPeer.items():
         strStatus = "Online" if v['status'] else 'Offline'
-
-        print(f'{k} | {strStatus} | {v['ip']} | {v['port']}')
+        print(f"{k} | {strStatus} | {v['ip']} | {v['port']}")
 
     return True
 
 def setActivity(cmd : str) -> bool:
-    global userActive
-
     if cmd.count(' ') == 0:
         print("Invalid arguments")
         return False
@@ -59,7 +49,7 @@ def setActivity(cmd : str) -> bool:
         print("Invalid arguments")
         return False
 
-    userActive = isActive
+    appState.userActivity = isActive
     return True
 
 def displayHelpMenu(cmd : str) -> bool:
@@ -85,39 +75,35 @@ def broadcastPresence():
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
         while True:
-            # Payload format {type: PRESENCE, username: name, status: True/False}
-            # Don't need to include ip because the socket library automatically return the client's address and port
             presencePayload = {
-                'type': BROADCAST_TYPE,
-                'username': username,
-                'status': userActive,
-                'tcpPort': CLIENT_PORT
+                'type': appState.broadcastSignature,
+                'username': appState.username,
+                'status': appState.userActivity,
+                'tcpPort': appState.clientPORT
             }
 
             bytesPayload = json.dumps(presencePayload).encode('utf-8')
 
-            sock.sendto(bytesPayload, (BROADCAST_IP, BROADCAST_PORT))
-            time.sleep(BROADCAST_INTERVAL)
+            sock.sendto(bytesPayload, (appState.broadcastIP, appState.broadcastPort))
+            time.sleep(appState.broadcastInterval)
 
 def listenPresence():
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-
-        # These 2 lines is only for local testing, remove when testing LAN
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
 
-        sock.bind(('', BROADCAST_PORT))
+        sock.bind(('', appState.broadcastPort))
 
         while True:
             dataBytes, peerAddr = sock.recvfrom(1024)
 
             decodedJSON = json.loads(dataBytes.decode('utf-8'))
-            if decodedJSON['type'] != BROADCAST_TYPE:
+            if decodedJSON['type'] != appState.broadcastSignature:
                 continue
 
-            with threadLock:
-                if decodedJSON['username'] != username:
-                    discoveredPeer[decodedJSON['username']] = {'ip': peerAddr[0], 'port': decodedJSON['tcpPort'], 'status': decodedJSON['status'], 'timestamp': time.time()}
+            with appState.threadLock:
+                if decodedJSON['username'] != appState.username:
+                    appState.discoveredPeer[decodedJSON['username']] = {'ip': peerAddr[0], 'port': decodedJSON['tcpPort'], 'status': decodedJSON['status'], 'timestamp': time.time()}
 
 def exitProgram(cmd : str):
     raise KeyboardInterrupt
@@ -128,37 +114,33 @@ def backgroundHandling():
 
         timedOutPeers = []
 
-        with threadLock:
-            for k, v in discoveredPeer.items():
+        with appState.threadLock:
+            for k, v in appState.discoveredPeer.items():
                 if curTime - v['timestamp'] > 10:
                     timedOutPeers.append(k)
 
             if timedOutPeers != []:
                 for peer in timedOutPeers:
-                    discoveredPeer.pop(peer)
+                    appState.discoveredPeer.pop(peer)
 
-        time.sleep(BACKGROUND_UPDATE_INTERVAL)
+        time.sleep(appState.backgroundUpdateInterval)
 
 def tcpAcceptor():
-    global tcpConnections
-
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
 
-        sock.bind((CLIENT_IP, CLIENT_PORT))
+        sock.bind((appState.clientIP, appState.clientPORT))
         sock.listen(5)
 
         while True:
             conn, addr = sock.accept()
-            tcpConnections[addr] = conn
+            appState.tcpConnections[addr] = conn
             print(f"{addr[0]} {addr[1]}")
 
 def tcpReceiver():
-    global tcpConnections, chatHistory
-
     while True:
-        sockList = list(tcpConnections.values())
+        sockList = list(appState.tcpConnections.values())
         try:
             for sock in sockList:
                 dataBytes = sock.recv(1024)
@@ -168,39 +150,37 @@ def tcpReceiver():
 
                     senderAddr = None
 
-                    with threadLock:
-                        for addr, conn in tcpConnections.items():
+                    with appState.threadLock:
+                        for addr, conn in appState.tcpConnections.items():
                             if conn == sock:
                                 senderAddr = addr
                                 break
 
-                        chatHistory.append({'sender': senderAddr, 'message': msg})
+                        appState.chatHistory.append({'sender': senderAddr, 'message': msg})
                     print(f"New message from {senderAddr}, msg: {msg}")
         except OSError:
             continue
 
 def choosePeer(cmd : str) -> bool:
-    global selectedUser, discoveredPeer, tcpConnections
-
     if cmd.count(' ') == 0:
         print("Invalid argument")
         return False
 
     cmd, arg = cmd.split(' ')
 
-    with threadLock:
-        if arg in discoveredPeer:
-            peer = discoveredPeer[arg]
+    with appState.threadLock:
+        if arg in appState.discoveredPeer:
+            peer = appState.discoveredPeer[arg]
 
-            selectedUser = (peer['ip'], peer['port'])
+            appState.selectedUser = (peer['ip'], peer['port'])
 
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-            print(selectedUser)
-            sock.connect(selectedUser)
+            print(appState.selectedUser)
+            sock.connect(appState.selectedUser)
 
-            tcpConnections[selectedUser] = sock
+            appState.tcpConnections[appState.selectedUser] = sock
 
             print(f"Selected User {arg} ({peer['ip']}, {peer['port']})")
         else:
@@ -210,32 +190,27 @@ def choosePeer(cmd : str) -> bool:
     return True
 
 def clearSelectedUser(cmd : str) -> bool:
-    global selectedUser, tcpConnections
-    if selectedUser is None:
+    if not appState.selectedUser:
         print("You haven't selected any user yet")
         return False
 
-    with threadLock:
-        if selectedUser in tcpConnections:
-            tcpConnections.pop(selectedUser)
+    with appState.threadLock:
+        if appState.selectedUser in appState.tcpConnections:
+            sock = appState.tcpConnections.pop(appState.selectedUser)
+            sock.close()
 
-    selectedUser = None
-    tcpConnections[selectedUser].close()
+    appState.selectedUser = tuple()
     return True
 
 def sendMsg(msg : str, selectedUser : tuple):
-    global tcpConnections
-
     if len(msg) == 0:
         print("Message can't be empty")
+        return
 
-    sock = tcpConnections[selectedUser]
-
+    sock = appState.tcpConnections[selectedUser]
     sock.sendall(msg.encode('utf-8'))
 
 def mainInput():
-    global selectedUser
-
     commandRegistry = {'/list': displayDiscoveredPeer,
                         '/status': setActivity,
                         '/quit': exitProgram,
@@ -247,10 +222,10 @@ def mainInput():
         cmd = input("> ").strip()
 
         if cmd[0] != '/':
-            if selectedUser is None:
+            if not appState.selectedUser:
                 print("Choose a user before chatting")
             else:
-                sendMsg(cmd, selectedUser)
+                sendMsg(cmd, appState.selectedUser)
         else:
             commandFound = False
             for k in commandRegistry.keys():
@@ -265,7 +240,7 @@ def mainInput():
 
 if __name__ == '__main__':
     try:
-        username = input("Enter your name: ")
+        appState.username = input("Enter your name: ")
 
         broadcastThread = threading.Thread(target=broadcastPresence, daemon=True)
         backgroundThread = threading.Thread(target=backgroundHandling, daemon=True)
