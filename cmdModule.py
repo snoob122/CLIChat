@@ -3,6 +3,9 @@ import json
 import threading
 import subprocess
 from abc import ABC, abstractmethod
+import utility
+
+util = utility.utility()
 
 class applicationState:
     def __init__(self):
@@ -10,7 +13,7 @@ class applicationState:
         self.userActivity = True
         self.tcpConnections : dict = {}
         self.selectedUser : tuple = ()
-        self.chatHistory : list = []
+        self.chatHistory : dict[tuple, list[dict[str, str]]] = {}
 
         self.backgroundUpdateInterval : int = 0
         self.threadLock : threading.Lock
@@ -40,7 +43,7 @@ class listCmd(commandStrategy):
         self.clearConsole()
         print("Dicovered Peer(s): ")
         for k, v in self._state.discoveredPeer.items():
-            strStatus = "Online" if v['status'] else 'Offline'
+            strStatus = "Online" if v['status'] else 'Away'
     
             print(f'{k} | {strStatus} | {v['ip']} | {v['port']}')
     
@@ -54,8 +57,10 @@ class setActivityCmd(commandStrategy):
 
         if arg == 'away':
             self._state.userActivity = False
+            print("Status set to away")
         elif arg == 'online':
             self._state.userActivity = True
+            print("Status set to online")
         else:
             print("Invalid arguments")
     
@@ -101,6 +106,12 @@ class sendMsgCmd(commandStrategy):
             'message': arg
         }
 
+        msgHistory = {'sender': self._state.username, 'message': arg}
+
+        if self._state.chatHistory.get(self._state.selectedUser):
+            self._state.chatHistory[self._state.selectedUser].append(msgHistory)
+        else:
+            self._state.chatHistory[self._state.selectedUser] = [msgHistory]
         bytesPayload = json.dumps(msgPayload).encode('utf-8')
 
         sock.sendall(bytesPayload)
@@ -117,15 +128,17 @@ class leaveChatCmd(commandStrategy):
             if self._state.selectedUser in self._state.tcpConnections:
                 sock = self._state.tcpConnections.pop(self._state.selectedUser)
                 sock.close()
-    
-        self._state.selectedUser = tuple()
+
+        util.clearTerminal()
+        print(f"User {self._state.selectedUser} disconnected")
+        self._state.selectedUser = ()
         return True
 
 class dummyCmd(commandStrategy):
     def execute(self, arg: str = '') -> bool:
         return True
 
-class commandHandler:  # Removed improper inheritance
+class commandHandler:
     def __init__(self):
         self.__commandDict: dict[str, commandStrategy] = {}
         self.__commandDetails: list[tuple[str, str]] = []

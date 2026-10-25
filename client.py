@@ -1,9 +1,14 @@
+import sys
 import json
 import socket
 import threading
 import time
 import select
 import cmdModule
+import subprocess
+import utility
+
+util = utility.utility()
 
 # Storing all session's variable in an object
 appState = cmdModule.applicationState()
@@ -15,11 +20,13 @@ appState.broadcastInterval = 3
 appState.threadLock = threading.Lock()
 appState.backgroundUpdateInterval = 1
 
-appState.clientIP = '192.168.1.12'
+appState.clientIP = util.getIPv4Addr()
 appState.clientPORT = int(input("Enter Port: ")) # Local testing only
 
 appState.username = ''
 appState.userActivity = True
+
+appState.selectedUser = ()
 
 # Register all required commands
 cmdHandler = cmdModule.commandHandler()
@@ -30,6 +37,9 @@ cmdHandler.register('/leave', 'Close the current chat', '/leave', cmdModule.leav
 cmdHandler.register('/status', 'Change your status (sent via UDP)', '/status <online|away>', cmdModule.setActivityCmd(appState))
 cmdHandler.register('/help', 'Show all commands', '/help', cmdModule.dummyCmd(appState))
 cmdHandler.register('/quit', 'Exit the program', '/quit', cmdModule.quitCmd(appState))
+
+def clearTerminal():
+    subprocess.run('clear', shell=True)
 
 def broadcastPresence():
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -94,7 +104,6 @@ def tcpAcceptor():
         while True:
             conn, addr = sock.accept()
             appState.tcpConnections[addr] = conn
-            print(f"{addr[0]} {addr[1]}")
 
 def tcpReceiver():
     while True:
@@ -113,26 +122,67 @@ def tcpReceiver():
 
                 if dataBytes:
                     msgJSON = json.loads(dataBytes.decode('utf-8'))
-
-                    senderAddr = None
+                    senderName = msgJSON['name']
 
                     with appState.threadLock:
-                        for addr, conn in list(appState.tcpConnections.items()):
-                            if conn == sock:
-                                senderAddr = addr
-                                break
+                        if senderName in appState.discoveredPeer:
+                            peer = appState.discoveredPeer[senderName]
+                            senderAddr = (peer['ip'], peer['port'])
+                        else:
+                            continue
 
-                        print(f"{msgJSON['name']}: {msgJSON['message']}")
+                        msgHistory = {'sender': msgJSON['name'], 'message': msgJSON['message']}
 
-                        #appState.chatHistory.append({'sender': senderAddr, 'message': msg})
-                        #print(f"New message from {senderAddr}, msg: {msg}")
+                        if appState.chatHistory.get(senderAddr):
+                            appState.chatHistory[senderAddr].append(msgHistory)
+                        else:
+                            appState.chatHistory[senderAddr] = [msgHistory]
         except OSError:
             continue
 
+def loadMsg() -> str:
+    conversation = ''
+
+    if appState.selectedUser:
+        hasConv = appState.chatHistory.get(appState.selectedUser)
+
+        if not hasConv:
+            return "Start a new conversation!"
+        
+        chatCollection = appState.chatHistory[appState.selectedUser]
+
+        for chat in chatCollection:
+            conversation += f'[{chat['sender']}]: {chat['message']}\n'
+        
+    return conversation
+
 def mainInput():
+    lastMsgCount = -2
+
     while True:
-        cmd = input("> ").strip()
-        cmdHandler.process(cmd)
+        hasSelectedUser = appState.selectedUser
+
+        if hasSelectedUser:
+            curMsgCount = len(appState.chatHistory.get(appState.selectedUser, []))
+        else:
+            curMsgCount = 0
+
+        if hasSelectedUser and curMsgCount != lastMsgCount: # Forces an update since the current loaded chat history is outdated
+            clearTerminal()
+            print(loadMsg())
+            print("> ", end="", flush=True) # Render the '> '
+            lastMsgCount = curMsgCount
+        elif not hasSelectedUser and lastMsgCount != -1: # Prevent continuous '> ' when the user is not chatting
+            print("> ", end="", flush=True)
+            lastMsgCount = -1
+
+        # Different from input(), this doesn't block the flow of the code so it will allow elements to render regardless of input
+        readable, _, _ = select.select([sys.stdin], [], [], 0.5) # Read from stdin
+
+        if readable:
+            cmd = sys.stdin.readline().strip()
+            cmdHandler.process(cmd)
+            lastMsgCount = -2
 
 if __name__ == '__main__':
     try:
