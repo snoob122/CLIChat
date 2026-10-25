@@ -1,4 +1,5 @@
 import socket
+import json
 import threading
 import subprocess
 from abc import ABC, abstractmethod
@@ -94,8 +95,34 @@ class sendMsgCmd(commandStrategy):
             return False
         
         sock : socket.socket = self._state.tcpConnections[self._state.selectedUser]
-        sock.sendall(arg.encode('utf-8'))
+
+        msgPayload = {
+            'name': self._state.username,
+            'message': arg
+        }
+
+        bytesPayload = json.dumps(msgPayload).encode('utf-8')
+
+        sock.sendall(bytesPayload)
     
+        return True
+
+class leaveChatCmd(commandStrategy):
+    def execute(self, arg: str = '') -> bool:
+        if not self._state.selectedUser:
+            print("You haven't selected any user yet")
+            return False
+    
+        with self._state.threadLock:
+            if self._state.selectedUser in self._state.tcpConnections:
+                sock = self._state.tcpConnections.pop(self._state.selectedUser)
+                sock.close()
+    
+        self._state.selectedUser = tuple()
+        return True
+
+class dummyCmd(commandStrategy):
+    def execute(self, arg: str = '') -> bool:
         return True
 
 class commandHandler:  # Removed improper inheritance
@@ -108,7 +135,7 @@ class commandHandler:  # Removed improper inheritance
         self.__commandDetails.append((commandSyntax, commandDesc))
 
     def getCmd(self) -> str:
-        resultStr = '/help: Display this message\n'
+        resultStr = ''
         for syntax, desc in self.__commandDetails:
             resultStr += f"{syntax}: {desc}\n"
         return resultStr
@@ -136,3 +163,4 @@ class commandHandler:  # Removed improper inheritance
         else:
             print(f"Unknown command: {command_name}")
             return False
+            
