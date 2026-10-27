@@ -14,6 +14,7 @@ class applicationState:
         self.tcpConnections : dict = {}
         self.selectedUser : tuple = ()
         self.chatHistory : dict[tuple, list[dict[str, str]]] = {}
+        self.unreadCount : dict[tuple, int] = {}
 
         self.backgroundUpdateInterval : int = 0
         self.threadLock : threading.Lock
@@ -75,6 +76,10 @@ class chatCmd(commandStrategy):
         with self._state.threadLock:
             if arg in self._state.discoveredPeer:
                 peer = self._state.discoveredPeer[arg]
+
+                if not peer['status']:
+                    print("Failed to connect, user is currently offline!")
+                    return False
     
                 self._state.selectedUser = (peer['ip'], peer['port'])
     
@@ -112,9 +117,14 @@ class sendMsgCmd(commandStrategy):
             self._state.chatHistory[self._state.selectedUser].append(msgHistory)
         else:
             self._state.chatHistory[self._state.selectedUser] = [msgHistory]
-        bytesPayload = json.dumps(msgPayload).encode('utf-8')
+        msgPayload = json.dumps(msgPayload).encode('utf-8')
 
-        sock.sendall(bytesPayload)
+        payloadLength = len(msgPayload)
+
+        lenPayload = payloadLength.to_bytes(4, 'big')
+        totalPayload = lenPayload + msgPayload
+
+        sock.sendall(totalPayload)
     
         return True
 
@@ -159,7 +169,7 @@ class commandHandler:
             return False
 
         if not inputStr.startswith('/'):
-            inputStr = f"/send {inputStr}" 
+            inputStr = f"/sendMSG {inputStr}" 
 
         inputParts = inputStr.split(maxsplit=1) 
         command_name = inputParts[0]

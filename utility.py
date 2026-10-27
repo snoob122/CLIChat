@@ -1,9 +1,9 @@
 import socket
-import subprocess
+from prompt_toolkit.shortcuts import clear
 
 class utility:
     def clearTerminal(self) -> None:
-        subprocess.run('clear', shell=True)
+        clear()
     def getIPv4Addr(self) -> str:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -15,3 +15,16 @@ class utility:
             sock.close()
 
         return ip
+    def recvAll(self, sock : socket.socket, length : int) -> bytes:
+        result = bytearray()
+
+        while len(result) < length:
+            packet = sock.recv(length - len(result))
+
+            if not packet:
+                continue
+
+            result.extend(packet)
+
+        return bytes(result)
+
